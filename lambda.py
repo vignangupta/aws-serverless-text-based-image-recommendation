@@ -1,11 +1,14 @@
-
 import json
 import urllib.parse
 import boto3
-import os
+
+print('Loading function')
+
+s3 = boto3.client('s3')
+
 
 def lambda_handler(event, context):
-    msg = ""
+    # msg = ""
     # Log event data received
     print("Received event: " + json.dumps(event, indent=2))
     # create S3 client
@@ -22,60 +25,35 @@ def lambda_handler(event, context):
     # Get event region
     event_region = event['Records'][0]['awsRegion']
 
-    sns_response = ""    
-    # list to store image labels
-    all_labels = list()
-    all_texts = list()
-    all_mod = list()
+    
     if event_name.split(':')[0] != 'ObjectRemoved':
         try:
-            msg = 'Event {0} triggered for object \"{1}\" from bucket \"{2}\" at {3} in region {4}'.format(event_name, object_key, bucket, event_time,event_region)
+            # msg = 'Event {0} triggered for object \"{1}\" from bucket \"{2}\" at {3} in region {4}'.format(event_name, object_key, bucket, event_time,event_region)
             response = s3.get_object(Bucket=bucket, Key=object_key)
             if response['ContentType'].split('/')[0] == 'image':
 
                 response_labels = rekog_client.detect_labels(
                     Image={'S3Object': {'Bucket': bucket,'Name': object_key}                    
                     })
+                print(response_labels)
 
                 response_text = rekog_client.detect_text(
                     Image={'S3Object': {'Bucket': bucket,'Name': object_key}                    
                     })
-
-                for label in response_labels['Labels']:
-                    all_labels.append("Name= " + label['Name'] + "; Confidence= " + str(label['Confidence']) )
-
-                for txt in response_text['TextDetections']:
-                    all_texts.append("Text= " + txt['DetectedText'] + "; Confidence= " + str(label['Confidence']) )
-
-                image_type = str.lower(response['ContentType'].split('/')[1].strip())
-                
-                # only JPG ad PNG is supported by Detect Moderation
-                if image_type in ['jpg', 'jpeg', 'png']:
-                    print('Getting Moderation Labels')
-                    for item in rekog_client.detect_moderation_labels(Image={'S3Object': {'Bucket': bucket,'Name': object_key}}, MinConfidence=30)['ModerationLabels']:
-                        all_mod.append("Label= " + item['Name'] + "; Confidence= " + str(item['Confidence']) + "; ParentName= " + item['ParentName'])
-
-
-                labels_string = ",".join(all_labels)
-                text_string = ",".join(all_texts)
-                
-                msg = msg + "\nImage : {0} , Labels Count : {1} , Labels Detected : {2} ".format(object_key, len(all_labels),labels_string )
-                msg = msg + "\nText Count: {0} , Text Detected : {1} ".format(len(all_texts), text_string)
-                msg = msg + "\nModeration Label: {0}".format(",".join(all_mod))
-                
-                # log the output
-                print(msg)
-                
-                # Create SNS Client
-                sns_client = boto3.client('sns')
-                # Publish Message to the Topic
-                if msg != "":
-                    sns_response = sns_client.publish(
-                        TopicArn=os.environ['TOPIC_ARN'],
-                        Message=msg,
-                        MessageStructure='string')
-
+                print(response_text)
+            
+            nosql_db = boto3.client('dynamodb')
+            write_labels = nosql_db.put_item(
+                TableName='ImageLables',
+                Item = {
+                    'object_key': object_key,
+                    'Labels' : response_labels,
+                    'Text' : response_text
+                }
+            )
         except Exception as exc:
             print('{0} Error getting object {1} from bucket {2} .'.format(exc.args[0], object_key, bucket))    
             
-    return sns_response
+    return 100
+
+
